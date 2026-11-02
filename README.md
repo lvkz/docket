@@ -4,6 +4,12 @@ Standalone calendar window (Quickshell) and reminder notifier for calendars sync
 vdirsyncer and read through khal. No accounts of its own: see
 [Adding a calendar](#adding-a-calendar).
 
+> **Use at your own risk.** Docket writes to your real calendars: editing and deleting rewrite
+> or remove `.ics` files that vdirsyncer then syncs to Google, iCloud or your CalDAV server.
+> Every edit and delete first copies the original to `~/.local/state/docket/backup/`. Search
+> reads khal's internal cache database (layout version 5) and refuses to run on any other
+> version. Built and tested on one Omarchy setup (khal 0.14, vdirsyncer 0.21, Quickshell 0.3).
+
 - `docket [agenda|week|month]`: open the window, or raise it if it is already open.
   Keys: ←/→ move, `t` today, `a`/`w`/`m` views, `n` new event, `/` search, `r` sync.
   Double-click empty space in the week view to create an event at that hour.
@@ -186,6 +192,8 @@ calendar in Settings → Calendars and Settings → Reminders.
 
 To remove a calendar, delete its sections from both files and its folder under `~/.calendars`.
 
-`qml/CalendarModel.js` is copied from
+## License
+
+MIT, see `LICENSE`. `qml/CalendarModel.js` is copied from
 [omarchy-caldav-calendar](https://github.com/SirWizardLizard/omarchy-caldav-calendar)
 (MIT, Copyright (c) 2026 sirwizardlizard; license text in `qml/CalendarModel.js.LICENSE`).
