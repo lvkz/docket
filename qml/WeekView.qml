@@ -8,6 +8,8 @@ Item {
     required property string selectedKey
     required property string todayKey
     property string highlightId: ""
+    // month title shown above the day columns (the toolbar hides its own in this view)
+    property string title: ""
     required property int dayStartHour
     required property int dayEndHour
     signal eventClicked(var event)
@@ -15,19 +17,38 @@ Item {
     signal createAt(string key, int hour)
 
     readonly property int hourCount: dayEndHour - dayStartHour
-    readonly property var days: Model.daysForView(selectedKey, "week", 1).map(d => Model.keyForDate(d))
+    // date keys of the columns: the whole week, or 3 days on narrow windows (set by the window)
+    property var days: Model.daysForView(selectedKey, "week", 1).map(d => Model.keyForDate(d))
     readonly property var grouped: Model.eventsByDay(events)
-    readonly property int gutter: 56
+    property int gutter: 56
     // stretch the day to the window; scroll only once hours would get shorter than 32px
     readonly property real hourHeight: Math.max(32, grid.height / hourCount)
-    readonly property real colWidth: (width - gutter) / 7
+    readonly property real colWidth: (width - gutter) / days.length
     readonly property int allDayRows: Math.min(3, Math.max(0, ...days.map(k => Model.allDayEventsForDay(grouped, k).length)))
     property date now: new Date()
 
     Timer { interval: 60000; repeat: true; running: true; onTriggered: root.now = new Date() }
 
+    // the row's height comes from the label inside it, never from itself (no binding loop)
+    Item {
+        id: titleRow
+        x: root.gutter
+        width: root.width - root.gutter
+        height: root.title !== "" ? titleLabel.implicitHeight + 10 : 0
+        visible: root.title !== ""
+        Text {
+            id: titleLabel
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: root.title
+            color: root.theme.foreground
+            font.family: root.theme.family
+            font.pixelSize: root.theme.fontSize + 4
+            font.bold: true
+        }
+    }
     Row {
         id: header
+        anchors.top: titleRow.bottom
         x: root.gutter
         Repeater {
             model: root.days

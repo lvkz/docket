@@ -5,14 +5,23 @@ Button {
     id: control
     required property var theme
     property bool active: false
+    // a single Nerd Font glyph: square button, and the font's Mono variant, whose icons fit
+    // their cell (the regular variant draws them wider, so they sit off-center)
+    property bool iconOnly: false
 
     flat: true
     focusPolicy: Qt.NoFocus
     padding: 6
     leftPadding: 12
     rightPadding: 12
-    font.family: theme.family
-    font.pixelSize: theme.fontSize
+    // icon buttons keep the height of a text button (so rows line up) and are square
+    implicitHeight: iconOnly ? Math.ceil(textMetrics.height) + topPadding + bottomPadding
+        : implicitContentHeight + topPadding + bottomPadding
+    implicitWidth: iconOnly ? implicitHeight : implicitContentWidth + leftPadding + rightPadding
+    font.family: iconOnly ? "CaskaydiaMono Nerd Font Mono" : theme.family
+    font.pixelSize: iconOnly ? theme.fontSize + 8 : theme.fontSize
+
+    FontMetrics { id: textMetrics; font.family: control.theme.family; font.pixelSize: control.theme.fontSize }
 
     contentItem: Text {
         text: control.text
