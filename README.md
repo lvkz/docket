@@ -188,4 +188,4 @@ To remove a calendar, delete its sections from both files and its folder under `
 
 `qml/CalendarModel.js` is copied from
 [omarchy-caldav-calendar](https://github.com/SirWizardLizard/omarchy-caldav-calendar)
-(MIT, Copyright (c) 2026 sirwizardlizard).
+(MIT, Copyright (c) 2026 sirwizardlizard; license text in `qml/CalendarModel.js.LICENSE`).

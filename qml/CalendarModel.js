@@ -1,4 +1,5 @@
-// From github.com/SirWizardLizard/omarchy-caldav-calendar (MIT, Copyright (c) 2026 sirwizardlizard).
+// From github.com/SirWizardLizard/omarchy-caldav-calendar (MIT, Copyright (c) 2026 sirwizardlizard;
+// license text in CalendarModel.js.LICENSE).
 // Copied unchanged; Docket uses the date, grid and layout helpers.
 function pad2(value) {
   return String(value).padStart(2, '0')
