@@ -58,6 +58,8 @@ Item {
             delegate: Column {
                 required property string modelData
                 width: root.colWidth
+                // explicit height: Row skips zero-height children, which shifted later days left
+                height: allDay.height
                 spacing: 2
                 Repeater {
                     model: Model.allDayEventsForDay(root.grouped, parent.modelData).slice(0, 3)
