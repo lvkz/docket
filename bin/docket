@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Open Docket, or raise the running window. Optional view: agenda | week | month
+set -euo pipefail
+
+config_dir="$(dirname "$(dirname "$(readlink -f "$0")")")/qml"
+view="${1:-}"
+
+if qs ipc -p "$config_dir" call docket view "$view" >/dev/null 2>&1; then
+  exit 0
+fi
+export QT_QUICK_CONTROLS_STYLE=Basic
+exec qs --no-duplicate -p "$config_dir"

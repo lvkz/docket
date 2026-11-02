@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Docket
+Comment=Calendar for your khal/vdirsyncer calendars
+Exec=docket
+Icon=x-office-calendar
+Terminal=false
+Categories=Office;Calendar;
+Keywords=calendar;agenda;events;khal;
+StartupNotify=false

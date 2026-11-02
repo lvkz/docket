@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""Send a desktop notification shortly before each khal event starts.
+
+Run once a minute (docket-notify.timer). Reads reminderMinutes (default 10, 0 = off) and
+reminderCalendarsOff from ~/.config/docket/config.json, the file Docket's Settings write.
+Remembers what it already announced in $XDG_STATE_HOME/docket/notified.json.
+"""
+
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timedelta
+from pathlib import Path
+
+KHAL_FORMAT = "%Y-%m-%d %H:%M"  # khal [locale] datetimeformat
+FIELDS = ["uid", "title", "start", "end", "all-day", "location", "calendar"]
+CONFIG = Path(os.environ.get("DOCKET_CONFIG")
+              or Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "docket/config.json")
+STATE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "docket/notified.json"
+
+
+def khal_events(window_minutes):
+    cmd = ["khal", "list", "--notstarted", "--once"]
+    for field in FIELDS:
+        cmd += ["--json", field]
+    cmd += ["now", f"{window_minutes}m"]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        sys.exit(f"docket-notify: khal list failed ({result.returncode}): {result.stderr.strip()}")
+    # khal prints one JSON array per day; an empty window prints nothing
+    events = []
+    for line in result.stdout.splitlines():
+        if line.strip():
+            events += json.loads(line)
+    return events
+
+
+def load_config():
+    try:
+        config = json.loads(CONFIG.read_text())
+    except FileNotFoundError:
+        return 10, set()
+    except json.JSONDecodeError as error:
+        sys.exit(f"docket-notify: {CONFIG} is not valid JSON: {error}")
+    minutes = config.get("reminderMinutes", 10)
+    if not isinstance(minutes, int) or minutes < 0:
+        sys.exit(f"docket-notify: reminderMinutes in {CONFIG} must be a whole number >= 0")
+    return minutes, set(config.get("reminderCalendarsOff", []))
+
+
+def due(events, now, lead, notified, muted=frozenset()):
+    """Timed events starting within `lead` minutes, not muted, not announced yet."""
+    found = []
+    for event in events:
+        if event["all-day"] == "True" or event["calendar"] in muted:
+            continue
+        start = datetime.strptime(event["start"], KHAL_FORMAT)
+        key = f"{event['uid']}|{event['start']}"
+        if now <= start <= now + timedelta(minutes=lead) and key not in notified:
+            found.append((key, start, event))
+    return found
+
+
+def notify(start, event, now):
+    minutes = max(0, round((start - now).total_seconds() / 60))
+    end = event["end"].split(" ")[-1]
+    body = f"{start:%H:%M}–{end} · in {minutes} min"
+    if event["location"]:
+        body += f"\n{event['location']}"
+    subprocess.run(["notify-send", "-a", "Docket", "-i", "x-office-calendar",
+                    event["title"] or "(untitled)", body], check=True)
+
+
+def load_notified(now):
+    try:
+        data = json.loads(STATE.read_text())
+    except FileNotFoundError:
+        return {}
+    cutoff = (now - timedelta(days=1)).isoformat()
+    return {key: stamp for key, stamp in data.items() if stamp > cutoff}
+
+
+def main():
+    lead, muted = load_config()
+    if lead == 0:
+        return
+    now = datetime.now().replace(second=0, microsecond=0)
+    notified = load_notified(now)
+    for key, start, event in due(khal_events(lead + 1), now, lead, notified, muted):
+        notify(start, event, now)
+        notified[key] = now.isoformat()
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    STATE.write_text(json.dumps(notified))
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,6 @@
+[Unit]
+Description=Docket: notify about upcoming calendar events
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/docket-notify

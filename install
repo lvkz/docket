@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Symlink Docket into ~/.local/bin, the app launcher and the systemd user dir,
+# then start the notifier timer.
+set -euo pipefail
+
+repo="$(cd "$(dirname "$0")" && pwd)"
+units="$HOME/.config/systemd/user"
+mkdir -p "$HOME/.local/bin" "$units" "$HOME/.config/docket"
+
+for bin in "$repo"/bin/*; do
+  if [[ -f "$bin" && -x "$bin" ]]; then
+    ln -sfn "$bin" "$HOME/.local/bin/$(basename "$bin")"
+  fi
+done
+for unit in "$repo"/systemd/*; do
+  ln -sfn "$unit" "$units/$(basename "$unit")"
+done
+mkdir -p "$HOME/.local/share/applications"
+ln -sfn "$repo/data/io.github.lvkz.Docket.desktop" "$HOME/.local/share/applications/io.github.lvkz.Docket.desktop"
+
+systemctl --user daemon-reload
+systemctl --user enable --now docket-notify.timer
+echo "Docket installed. Logs: journalctl --user -u docket-notify"

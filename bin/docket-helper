@@ -1,0 +1,371 @@
+#!/usr/bin/env python3
+"""JSON bridge between the Docket window and khal/vdirsyncer.
+
+  docket-helper events FROM TO        FROM/TO: YYYY-MM-DD, TO exclusive
+  docket-helper calendars
+  docket-helper create JSON           {"calendar", "title", "start", "end", "allDay", "location",
+                                       "description", "repeat", "until"}
+  docket-helper update JSON           {"calendar", "uid", "title", "start", "end", "allDay", "location",
+                                       "description"}; single (non-repeating) events only
+  docket-helper delete JSON           {"calendar", "uid"}; single (non-repeating) events only
+  docket-helper search QUERY          matches in title, location, description; next occurrence first
+  docket-helper sync
+
+Always prints one JSON object: {"ok": true, ...} or {"ok": false, "error": "..."}.
+Set DOCKET_KHAL_CONFIG and DOCKET_CALENDAR_ROOT to use another khal config and calendar folder
+(used by the tests; sync is skipped then).
+"""
+
+import glob
+import json
+import os
+import shutil
+import sqlite3
+import subprocess
+import sys
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
+
+from zoneinfo import ZoneInfo
+
+from icalendar import Calendar
+
+KHAL_FORMAT = "%Y-%m-%d %H:%M"  # khal [locale] datetimeformat
+FIELDS = ["uid", "title", "start", "end", "all-day", "location", "description",
+          "calendar", "calendar-color", "repeat-symbol", "status"]
+CALENDAR_ROOT = Path(os.environ.get("DOCKET_CALENDAR_ROOT") or Path.home() / ".calendars")
+KHAL_DB = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "khal/khal.db"
+KHAL_DB_VERSION = 5
+REPEATS = {"daily", "weekly", "monthly", "yearly"}
+SEARCH_LIMIT = 50
+BACKUP_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "docket/backup"
+
+
+class HelperError(Exception):
+    pass
+
+
+def khal(*args):
+    cmd = ["khal"]
+    if os.environ.get("DOCKET_KHAL_CONFIG"):
+        cmd += ["-c", os.environ["DOCKET_KHAL_CONFIG"]]
+    result = subprocess.run(cmd + list(args), capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise HelperError(f"khal {args[0]} failed: {result.stderr.strip() or result.returncode}")
+    return result.stdout
+
+
+def calendar_label(calendar_id):
+    """Email-style ids read fine; opaque ids get their account folder (~/.calendars/<account>/)."""
+    if "@" in calendar_id and not calendar_id.endswith("calendar.google.com"):
+        return calendar_id
+    matches = list(CALENDAR_ROOT.glob(f"*/{calendar_id}")) + list(CALENDAR_ROOT.glob(calendar_id))
+    if not matches:
+        return calendar_id
+    account = matches[0].parent.name if matches[0].parent != CALENDAR_ROOT else matches[0].name
+    return account if account != calendar_id else calendar_id
+
+
+def iso(text, all_day, is_end):
+    if all_day:
+        day = date.fromisoformat(text)
+        # khal's all-day end is inclusive; the window expects exclusive dates
+        return (day + timedelta(days=1)).isoformat() if is_end else day.isoformat()
+    return datetime.strptime(text, KHAL_FORMAT).astimezone().isoformat()
+
+
+def to_event(row):
+    all_day = row["all-day"] == "True"
+    return {
+        "id": f"{row['uid']}|{row['start']}",
+        "uid": row["uid"],
+        "title": row["title"],
+        "start": iso(row["start"], all_day, False),
+        "end": iso(row["end"], all_day, True),
+        "allDay": all_day,
+        "location": row["location"],
+        "description": row["description"],
+        "calendarId": row["calendar"],
+        "calendarName": calendar_label(row["calendar"]),
+        "calendarColor": row["calendar-color"],
+        "repeats": bool(row["repeat-symbol"]),
+        "status": row["status"].lower() or "confirmed",
+    }
+
+
+def events(start, end):
+    last = date.fromisoformat(end) - timedelta(days=1)
+    args = ["list"]
+    for field in FIELDS:
+        args += ["--json", field]
+    out = khal(*args, start, last.isoformat())
+    seen = {}
+    # one JSON array per day; multi-day events repeat on every day they cover
+    for line in out.splitlines():
+        for row in json.loads(line) if line.strip() else []:
+            seen.setdefault(f"{row['uid']}|{row['start']}", row)
+    return {"events": [to_event(row) for row in seen.values()]}
+
+
+def calendar_settings(config_text):
+    """{id: {"readonly", "color"}} from khal's [[sections]]: the section name is the id for
+    type=calendar; for type=discover every folder under `path` is an id sharing the section's settings."""
+    sections, current = [], None
+    for raw in config_text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if line.startswith("[[") and line.endswith("]]"):
+            current = {"name": line[2:-2].strip()}
+            sections.append(current)
+        elif line.startswith("["):
+            current = None
+        elif current is not None and "=" in line:
+            key, value = (part.strip().strip("\"'") for part in line.split("=", 1))
+            current[key] = value
+    settings = {}
+    for section in sections:
+        values = {"readonly": section.get("readonly", "").lower() == "true",
+                  "color": section.get("color", "")}
+        if section.get("type") == "discover":
+            for path in glob.glob(os.path.expanduser(section.get("path", ""))):
+                settings[Path(path).name] = values
+        else:
+            settings[section["name"]] = values
+    return settings
+
+
+def calendars():
+    settings = calendar_settings(config_path().read_text())
+    ids = [line for line in khal("printcalendars").splitlines() if line.strip()]
+    empty = {"readonly": False, "color": ""}
+    return {"calendars": [{"id": cid, "name": calendar_label(cid), **settings.get(cid, empty)}
+                          for cid in ids]}
+
+def config_path():
+    return Path(os.environ.get("DOCKET_KHAL_CONFIG") or Path.home() / ".config/khal/config")
+
+
+# ponytail: reads khal's own cache DB (layout version 5) because `khal search` prints every
+# past occurrence and takes seconds; if khal changes the layout, this fails loudly below.
+def search(query):
+    query = query.strip()
+    if len(query) < 2:
+        return {"events": []}
+    if not KHAL_DB.exists():
+        raise HelperError(f"khal's database {KHAL_DB} is missing; run any khal command once")
+    db = sqlite3.connect(f"file:{KHAL_DB}?mode=ro", uri=True)
+    version = db.execute("SELECT version FROM version").fetchone()[0]
+    if version != KHAL_DB_VERSION:
+        raise HelperError(f"khal database version {version} is not supported (expected {KHAL_DB_VERSION})")
+    # recs_loc: timed, UTC timestamps; recs_float: all-day/floating, wall-clock timestamps
+    rows = db.execute("""
+        SELECT e.item, e.calendar, r.href, r.dtstart, r.dtend, 0 FROM recs_loc r
+          JOIN events e ON e.href = r.href AND e.calendar = r.calendar WHERE e.item LIKE ?
+        UNION ALL
+        SELECT e.item, e.calendar, r.href, r.dtstart, r.dtend, r.dtype = 0 FROM recs_float r
+          JOIN events e ON e.href = r.href AND e.calendar = r.calendar WHERE e.item LIKE ?
+        """, (f"%{query}%", f"%{query}%")).fetchall()
+    colors = calendar_settings(config_path().read_text())
+    now = datetime.now()
+    best = {}
+    for item, calendar, href, start_ts, end_ts, all_day in rows:
+        start, end = occurrence(start_ts, end_ts, all_day)
+        key = (calendar, href)
+        upcoming = end >= now
+        current = best.get(key)
+        # keep the next upcoming occurrence, or the latest past one
+        if current is None or (upcoming and (not current[0] or start < current[1])) \
+                or (not upcoming and not current[0] and start > current[1]):
+            best[key] = (upcoming, start, end, all_day, item, calendar)
+    found = []
+    for upcoming, start, end, all_day, item, calendar in best.values():
+        event = search_event(item, calendar, start, end, all_day, colors, query)
+        if event:
+            found.append((not upcoming, start if upcoming else -start.timestamp(), event))
+    found.sort(key=lambda entry: entry[:2])  # upcoming soonest first, then past newest first
+    return {"events": [event for *_, event in found[:SEARCH_LIMIT]]}
+
+
+def occurrence(start_ts, end_ts, all_day):
+    if all_day:
+        to_wall = lambda ts: datetime.fromtimestamp(ts, UTC).replace(tzinfo=None)
+    else:
+        to_wall = lambda ts: datetime.fromtimestamp(ts)
+    return to_wall(start_ts), to_wall(end_ts)
+
+
+def search_event(item, calendar, start, end, all_day, colors, query):
+    """Event in the window's format, or None when the match was only in attendees, ids, etc."""
+    master = next((c for c in Calendar.from_ical(item).walk("VEVENT") if "RECURRENCE-ID" not in c), None)
+    if master is None:
+        return None
+    fields = {name: str(master.get(name, "")) for name in ("SUMMARY", "LOCATION", "DESCRIPTION")}
+    if not any(query.lower() in value.lower() for value in fields.values()):
+        return None
+    khal_start = start.strftime("%Y-%m-%d" if all_day else KHAL_FORMAT)
+    uid = str(master.get("UID", ""))
+    return {
+        "id": f"{uid}|{khal_start}",
+        "uid": uid,
+        "title": fields["SUMMARY"],
+        "start": start.date().isoformat() if all_day else start.astimezone().isoformat(),
+        "end": end.date().isoformat() if all_day else end.astimezone().isoformat(),
+        "allDay": bool(all_day),
+        "location": fields["LOCATION"],
+        "description": fields["DESCRIPTION"],
+        "calendarId": calendar,
+        "calendarName": calendar_label(calendar),
+        "calendarColor": colors.get(calendar, {}).get("color", ""),
+        "repeats": "RRULE" in master,
+        "status": str(master.get("STATUS", "confirmed")).lower(),
+    }
+
+
+def event_file(calendar_id, uid):
+    """The .ics file in ~/.calendars that holds this UID (folded lines unfolded before matching)."""
+    if calendar_settings(config_path().read_text()).get(calendar_id, {}).get("readonly"):
+        raise HelperError("This calendar is read-only")
+    folders = list(CALENDAR_ROOT.glob(f"*/{calendar_id}")) + list(CALENDAR_ROOT.glob(calendar_id))
+    if not folders:
+        raise HelperError(f"No folder for calendar {calendar_id} under {CALENDAR_ROOT}")
+    needle = f"UID:{uid}"
+    for path in folders[0].glob("*.ics"):
+        text = path.read_text(errors="replace")
+        if needle in text.replace("\r\n ", "").replace("\n ", ""):
+            return path, text
+    raise HelperError(f"Event {uid} not found in {folders[0]}; try Sync first")
+
+
+def single_event(text):
+    cal = Calendar.from_ical(text)
+    vevents = cal.walk("VEVENT")
+    if len(vevents) != 1 or any(k in vevents[0] for k in ("RRULE", "RDATE", "RECURRENCE-ID")):
+        raise HelperError("Repeating events can't be edited in Docket yet; use Google Calendar or iCloud")
+    return cal, vevents[0]
+
+
+def backup(path):
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    target = BACKUP_DIR / f"{datetime.now():%Y%m%d-%H%M%S-%f}-{path.name}"
+    shutil.copy2(path, target)
+    return str(target)
+
+
+def local_zone():
+    zone = os.path.realpath("/etc/localtime").split("zoneinfo/", 1)[-1]
+    return ZoneInfo(zone)
+
+
+def update(payload):
+    data = json.loads(payload)
+    title = data.get("title", "").strip()
+    if not title:
+        raise HelperError("An event needs a title")
+    path, text = event_file(data["calendar"], data["uid"])
+    cal, event = single_event(text)
+    if data.get("allDay"):
+        start = date.fromisoformat(data["start"][:10])
+        end = date.fromisoformat(data["end"][:10]) + timedelta(days=1)  # form's last day is inclusive
+    else:
+        # keep the event's own time zone when it has one
+        old = event.decoded("DTSTART")
+        zone = old.tzinfo if isinstance(old, datetime) and old.tzinfo else local_zone()
+        start = datetime.fromisoformat(data["start"]).replace(tzinfo=zone)
+        end = datetime.fromisoformat(data["end"]).replace(tzinfo=zone)
+    if end <= start:
+        raise HelperError("The event must end after it starts")
+    sequence = int(event.get("SEQUENCE", 0))
+    for key in ("DTSTART", "DTEND", "DURATION", "SUMMARY", "LOCATION", "DESCRIPTION",
+                "DTSTAMP", "LAST-MODIFIED", "SEQUENCE"):
+        event.pop(key, None)
+    event.add("SUMMARY", title)
+    event.add("DTSTART", start)
+    event.add("DTEND", end)
+    if data.get("location", "").strip():
+        event.add("LOCATION", data["location"].strip())
+    if data.get("description", "").strip():
+        event.add("DESCRIPTION", data["description"].strip())
+    now = datetime.now(UTC)
+    event.add("DTSTAMP", now)
+    event.add("LAST-MODIFIED", now)
+    event.add("SEQUENCE", sequence + 1)  # servers ignore changes that don't bump it
+    cal.add_missing_timezones()
+    saved = backup(path)
+    tmp = path.with_suffix(".docket-tmp")
+    tmp.write_bytes(cal.to_ical())
+    os.replace(tmp, path)
+    return {"updated": title, "backup": saved, "synced": start_sync(wait=False)}
+
+
+def delete(payload):
+    data = json.loads(payload)
+    path, text = event_file(data["calendar"], data["uid"])
+    single_event(text)
+    saved = backup(path)
+    path.unlink()
+    return {"deleted": data["uid"], "backup": saved, "synced": start_sync(wait=False)}
+
+
+def create(payload):
+    data = json.loads(payload)
+    title = data.get("title", "").strip()
+    if not title:
+        raise HelperError("An event needs a title")
+    if data.get("allDay"):
+        when = [data["start"][:10], data["end"][:10]]
+    else:
+        start = datetime.fromisoformat(data["start"])
+        end = datetime.fromisoformat(data["end"])
+        if end <= start:
+            raise HelperError("The event must end after it starts")
+        when = [start.strftime(KHAL_FORMAT), end.strftime(KHAL_FORMAT)]
+    args = ["new", "-a", data["calendar"]]
+    if data.get("location"):
+        args += ["-l", data["location"]]
+    repeat = data.get("repeat", "")
+    if repeat:
+        if repeat not in REPEATS:
+            raise HelperError(f"Repeat must be one of {', '.join(sorted(REPEATS))}")
+        args += ["-r", repeat]
+        if data.get("until"):
+            # khal's --until is midnight at the start of that day; make the chosen day inclusive
+            last = date.fromisoformat(data["until"]) + timedelta(days=1)
+            args += ["-u", last.isoformat()]
+    description = data.get("description", "").strip()
+    khal(*args, *when, title, *(["::", description] if description else []))
+    return {"created": title, "synced": start_sync(wait=False)}
+
+
+def start_sync(wait):
+    if os.environ.get("DOCKET_KHAL_CONFIG"):
+        return False
+    cmd = ["systemctl", "--user", "start", "vdirsyncer-sync.service"]
+    if not wait:
+        cmd.insert(3, "--no-block")
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise HelperError(f"vdirsyncer sync failed: {result.stderr.strip()}")
+    return True
+
+
+def main(argv):
+    commands = {
+        "events": lambda: events(argv[1], argv[2]),
+        "calendars": calendars,
+        "create": lambda: create(argv[1]),
+        "search": lambda: search(argv[1]),
+        "update": lambda: update(argv[1]),
+        "delete": lambda: delete(argv[1]),
+        "sync": lambda: {"synced": start_sync(wait=True)},
+    }
+    try:
+        if not argv or argv[0] not in commands:
+            raise HelperError(f"usage: docket-helper {{{','.join(commands)}}} ...")
+        payload = {"ok": True, **commands[argv[0]]()}
+    except (HelperError, IndexError, KeyError, ValueError) as error:
+        payload = {"ok": False, "error": str(error) or type(error).__name__}
+    print(json.dumps(payload))
+    return 0 if payload["ok"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

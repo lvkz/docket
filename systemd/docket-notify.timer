@@ -1,0 +1,9 @@
+[Unit]
+Description=Docket: check for upcoming events every minute
+
+[Timer]
+OnCalendar=*:*:00
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
