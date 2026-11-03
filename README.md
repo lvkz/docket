@@ -34,12 +34,14 @@ vdirsyncer and read through khal. No accounts of its own: see
   `delete`, `search`, `sync`).
 
 New events (optionally repeating daily/weekly/monthly/yearly, with notes) go through
-`khal new`. Single events can be edited or deleted from their details popup: Docket rewrites
-or removes the event's `.ics` file in `~/.calendars` (bumping `SEQUENCE`), after copying the
+`khal new`. Events can be edited or deleted from their details popup: Docket rewrites or
+removes the event's `.ics` file in `~/.calendars` (bumping `SEQUENCE`), after copying the
 original to `~/.local/state/docket/backup/`. Every write then starts `vdirsyncer-sync.service`.
-Repeating events, events crossing midnight and read-only calendars are not editable yet; use
-Google Calendar or iCloud for those. Restore a change by copying its backup back into the
-calendar folder and syncing.
+For a repeating event you pick **this one** (stored as an exception to the series) or **all**.
+Changing all occurrences can change their time but not their day, and a repeating event can't
+switch between all-day and timed. Events crossing midnight and read-only calendars are not
+editable; use Google Calendar or iCloud for those. Restore a change by copying its backup back
+into the calendar folder and syncing.
 
 ## Requirements
 
@@ -71,7 +73,7 @@ WantedBy=timers.target
 
 `./install` (symlinks into `~/.local/bin`, `~/.local/share/applications`,
 `~/.config/systemd/user`, enables the reminder timer).
-Test: `python3 tests/test_notify.py`
+Test: `python3 tests/test_notify.py && python3 tests/test_helper.py` (the second needs khal)
 
 ## Adding a calendar
 

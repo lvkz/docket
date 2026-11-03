@@ -11,6 +11,8 @@ Popup {
     property string localError: ""
     // the event being edited, or null when creating
     property var editing: null
+    // for a repeating event: "this" occurrence or "all" of them
+    property string scope: ""
     property bool crossesMidnight: false
     readonly property var writable: calendars.filter(c => !c.readonly)
     readonly property var repeats: [
@@ -22,10 +24,11 @@ Popup {
     ]
 
     // hour: start hour to prefill (double-click on the grid); omitted = next full hour
-    // prefill from an existing single event; calendar and repeat stay as they are
-    function edit(event) {
+    // prefill from an existing event; calendar and repeat stay as they are
+    function edit(event, editScope) {
         start(Model.eventDateKey(event));
         editing = event;
+        scope = editScope;
         title.text = event.title;
         calendar.currentIndex = Math.max(0, writable.findIndex(c => c.id === event.calendarId));
         allDay.checked = event.allDay;
@@ -76,6 +79,8 @@ Popup {
             backend.update({
                 calendar: editing.calendarId,
                 uid: editing.uid,
+                scope: scope,
+                occurrence: editing.start,
                 title: title.text.trim(),
                 location: location.text.trim(),
                 description: description.text.trim(),
@@ -146,7 +151,8 @@ Popup {
 
         Text {
             Layout.columnSpan: 2
-            text: root.editing ? "Edit event" : "New event"
+            text: !root.editing ? "New event" : root.scope === "this" ? "Edit this occurrence"
+                : root.scope === "all" ? "Edit all occurrences" : "Edit event"
             color: root.theme.foreground
             font.family: root.theme.family
             font.pixelSize: root.theme.fontSize + 3
@@ -159,7 +165,7 @@ Popup {
         FormLabel { text: "Date" }
         Field { id: date; placeholderText: "YYYY-MM-DD" }
         FormLabel { text: "All day" }
-        CheckBox { id: allDay }
+        CheckBox { id: allDay; enabled: !(root.editing && root.editing.repeats) }
         FormLabel { text: allDay.checked ? "Last day" : "Time" }
         RowLayout {
             Layout.fillWidth: true

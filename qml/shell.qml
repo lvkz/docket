@@ -429,7 +429,7 @@ ShellRoot {
             backend: backend
             calendars: root.calendars
             events: root.events
-            onEditRequested: event => form.edit(event)
+            onEditRequested: (event, scope) => form.edit(event, scope)
         }
         SearchOverlay {
             id: search

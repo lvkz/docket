@@ -6,8 +6,10 @@
   docket-helper create JSON           {"calendar", "title", "start", "end", "allDay", "location",
                                        "description", "repeat", "until"}
   docket-helper update JSON           {"calendar", "uid", "title", "start", "end", "allDay", "location",
-                                       "description"}; single (non-repeating) events only
-  docket-helper delete JSON           {"calendar", "uid"}; single (non-repeating) events only
+                                       "description", "scope", "occurrence"}
+  docket-helper delete JSON           {"calendar", "uid", "scope", "occurrence"}
+                                      repeating events: scope "this" or "all"; occurrence is the
+                                      clicked occurrence's start as the window shows it
   docket-helper search QUERY          matches in title, location, description; next occurrence first
   docket-helper sync
 
@@ -23,6 +25,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+from copy import deepcopy
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -235,12 +238,89 @@ def event_file(calendar_id, uid):
     raise HelperError(f"Event {uid} not found in {folders[0]}; try Sync first")
 
 
-def single_event(text):
+def series(calendar_id, uid):
+    """(path, calendar, master, overrides) for the file holding UID. Overrides are the
+    VEVENTs with a RECURRENCE-ID: single occurrences of a repeating event that were changed."""
+    path, text = event_file(calendar_id, uid)
     cal = Calendar.from_ical(text)
-    vevents = cal.walk("VEVENT")
-    if len(vevents) != 1 or any(k in vevents[0] for k in ("RRULE", "RDATE", "RECURRENCE-ID")):
-        raise HelperError("Repeating events can't be edited in Docket yet; use Google Calendar or iCloud")
-    return cal, vevents[0]
+    vevents = [v for v in cal.walk("VEVENT") if str(v.get("UID")) == uid]
+    master = next((v for v in vevents if "RECURRENCE-ID" not in v), None)
+    if master is None:
+        raise HelperError("Only changed occurrences of this event are in your calendar; "
+                          "edit it where it was created")
+    return path, cal, master, [v for v in vevents if v is not master]
+
+
+def repeats(master, overrides):
+    return bool(overrides) or "RRULE" in master or "RDATE" in master
+
+
+def as_like(text, like):
+    """The window's date or local ISO time, as the same kind of value as `like`: a date, a
+    floating (zone-less) wall time, or a time in like's zone."""
+    if not isinstance(like, datetime):
+        return date.fromisoformat(text[:10])
+    moment = datetime.fromisoformat(text)
+    moment = moment.astimezone() if moment.tzinfo is None else moment
+    if like.tzinfo is None:
+        return moment.astimezone().replace(tzinfo=None)
+    return moment.astimezone(like.tzinfo)
+
+
+def instant(value):
+    """Comparable form of a DTSTART/RECURRENCE-ID value (floating times count as local)."""
+    if isinstance(value, datetime):
+        return (value if value.tzinfo else value.astimezone()).astimezone(UTC)
+    return value
+
+
+def find_occurrence(master, overrides, occurrence):
+    """(recurrence id, override or None) of the occurrence the window shows at `occurrence`."""
+    first = master.decoded("DTSTART")
+    shown = instant(as_like(occurrence, first))
+    for override in overrides:
+        if shown in (instant(override.decoded("DTSTART")), instant(override.decoded("RECURRENCE-ID"))):
+            return override.decoded("RECURRENCE-ID"), override
+    return as_like(occurrence, first), None
+
+
+def form_times(data, old_start):
+    if data.get("allDay"):
+        start = date.fromisoformat(data["start"][:10])
+        end = date.fromisoformat(data["end"][:10]) + timedelta(days=1)  # form's last day is inclusive
+    else:
+        # the form shows local wall times; store them in the event's own zone when it has one
+        like = old_start if isinstance(old_start, datetime) else datetime.now(local_zone())
+        start, end = as_like(data["start"], like), as_like(data["end"], like)
+    if end <= start:
+        raise HelperError("The event must end after it starts")
+    return start, end
+
+
+def set_fields(event, data, start, end):
+    title = data.get("title", "").strip()
+    if not title:
+        raise HelperError("An event needs a title")
+    for key in ("DTSTART", "DTEND", "DURATION", "SUMMARY", "LOCATION", "DESCRIPTION"):
+        event.pop(key, None)
+    event.add("SUMMARY", title)
+    event.add("DTSTART", start)
+    event.add("DTEND", end)
+    for key, field in (("LOCATION", "location"), ("DESCRIPTION", "description")):
+        if data.get(field, "").strip():
+            event.add(key, data[field].strip())
+    touch(event)
+    return title
+
+
+def touch(event):
+    sequence = int(event.get("SEQUENCE", 0))
+    for key in ("DTSTAMP", "LAST-MODIFIED", "SEQUENCE"):
+        event.pop(key, None)
+    now = datetime.now(UTC)
+    event.add("DTSTAMP", now)
+    event.add("LAST-MODIFIED", now)
+    event.add("SEQUENCE", sequence + 1)  # servers ignore changes that don't bump it
 
 
 def backup(path):
@@ -255,54 +335,92 @@ def local_zone():
     return ZoneInfo(zone)
 
 
-def update(payload):
-    data = json.loads(payload)
-    title = data.get("title", "").strip()
-    if not title:
-        raise HelperError("An event needs a title")
-    path, text = event_file(data["calendar"], data["uid"])
-    cal, event = single_event(text)
-    if data.get("allDay"):
-        start = date.fromisoformat(data["start"][:10])
-        end = date.fromisoformat(data["end"][:10]) + timedelta(days=1)  # form's last day is inclusive
-    else:
-        # keep the event's own time zone when it has one
-        old = event.decoded("DTSTART")
-        zone = old.tzinfo if isinstance(old, datetime) and old.tzinfo else local_zone()
-        start = datetime.fromisoformat(data["start"]).replace(tzinfo=zone)
-        end = datetime.fromisoformat(data["end"]).replace(tzinfo=zone)
-    if end <= start:
-        raise HelperError("The event must end after it starts")
-    sequence = int(event.get("SEQUENCE", 0))
-    for key in ("DTSTART", "DTEND", "DURATION", "SUMMARY", "LOCATION", "DESCRIPTION",
-                "DTSTAMP", "LAST-MODIFIED", "SEQUENCE"):
-        event.pop(key, None)
-    event.add("SUMMARY", title)
-    event.add("DTSTART", start)
-    event.add("DTEND", end)
-    if data.get("location", "").strip():
-        event.add("LOCATION", data["location"].strip())
-    if data.get("description", "").strip():
-        event.add("DESCRIPTION", data["description"].strip())
-    now = datetime.now(UTC)
-    event.add("DTSTAMP", now)
-    event.add("LAST-MODIFIED", now)
-    event.add("SEQUENCE", sequence + 1)  # servers ignore changes that don't bump it
+def save(path, cal):
     cal.add_missing_timezones()
     saved = backup(path)
     tmp = path.with_suffix(".docket-tmp")
     tmp.write_bytes(cal.to_ical())
     os.replace(tmp, path)
-    return {"updated": title, "backup": saved, "synced": start_sync(wait=False)}
+    return saved
+
+
+def shift_series(master, overrides, delta):
+    """Move every occurrence by `delta` (a time-of-day change) so exceptions keep matching."""
+    exdates = [d.dt for prop in listed(master.get("EXDATE")) for d in prop.dts]
+    master.pop("EXDATE", None)
+    for exdate in exdates:
+        master.add("EXDATE", exdate + delta)
+    for override in overrides:
+        recurrence_id = override.decoded("RECURRENCE-ID")
+        override.pop("RECURRENCE-ID")
+        override.add("RECURRENCE-ID", recurrence_id + delta)
+    rule = master.get("RRULE")
+    if rule and isinstance((rule.get("UNTIL") or [None])[0], datetime):
+        rule["UNTIL"] = [until + delta for until in rule["UNTIL"]]
+
+
+def listed(value):
+    return value if isinstance(value, list) else [value] if value is not None else []
+
+
+def update(payload):
+    data = json.loads(payload)
+    path, cal, master, overrides = series(data["calendar"], data["uid"])
+    if not repeats(master, overrides):
+        start, end = form_times(data, master.decoded("DTSTART"))
+        title = set_fields(master, data, start, end)
+    elif data.get("allDay") != (not isinstance(master.decoded("DTSTART"), datetime)):
+        raise HelperError("A repeating event can't switch between all-day and timed")
+    elif data.get("scope") == "this":
+        title = update_occurrence(cal, master, overrides, data)
+    elif data.get("scope") == "all":
+        title = update_series(master, overrides, data)
+    else:
+        raise HelperError("Say whether to change this occurrence or all of them")
+    return {"updated": title, "backup": save(path, cal), "synced": start_sync(wait=False)}
+
+
+def update_occurrence(cal, master, overrides, data):
+    recurrence_id, override = find_occurrence(master, overrides, data["occurrence"])
+    if override is None:
+        override = deepcopy(master)
+        for key in ("RRULE", "RDATE", "EXDATE"):
+            override.pop(key, None)
+        override.add("RECURRENCE-ID", recurrence_id)
+        cal.add_component(override)
+    start, end = form_times(data, master.decoded("DTSTART"))
+    return set_fields(override, data, start, end)
+
+
+def update_series(master, overrides, data):
+    first = master.decoded("DTSTART")
+    recurrence_id, _ = find_occurrence(master, overrides, data["occurrence"])
+    start, end = form_times(data, first)
+    wall = lambda value: value.replace(tzinfo=None) if isinstance(value, datetime) else value
+    delta = wall(start) - wall(recurrence_id)
+    if wall(start).toordinal() != wall(recurrence_id).toordinal():
+        raise HelperError("Moving every occurrence to another day isn't supported; "
+                          "change the time, or edit this occurrence only")
+    if delta:
+        shift_series(master, overrides, delta)
+    return set_fields(master, data, first + delta, first + delta + (end - start))
 
 
 def delete(payload):
     data = json.loads(payload)
-    path, text = event_file(data["calendar"], data["uid"])
-    single_event(text)
-    saved = backup(path)
-    path.unlink()
-    return {"deleted": data["uid"], "backup": saved, "synced": start_sync(wait=False)}
+    path, cal, master, overrides = series(data["calendar"], data["uid"])
+    if not repeats(master, overrides) or data.get("scope") == "all":
+        saved = backup(path)
+        path.unlink()
+        return {"deleted": data["uid"], "backup": saved, "synced": start_sync(wait=False)}
+    if data.get("scope") != "this":
+        raise HelperError("Say whether to delete this occurrence or all of them")
+    recurrence_id, override = find_occurrence(master, overrides, data["occurrence"])
+    if override is not None:
+        cal.subcomponents.remove(override)
+    master.add("EXDATE", recurrence_id)
+    touch(master)
+    return {"deleted": data["uid"], "backup": save(path, cal), "synced": start_sync(wait=False)}
 
 
 def create(payload):

@@ -44,7 +44,9 @@ Item {
     }
     function create(event) { write("create", "Creating event", event); }
     function update(event) { write("update", "Saving event", event); }
-    function remove(event) { write("delete", "Deleting event", { calendar: event.calendarId, uid: event.uid }); }
+    function remove(event, scope) {
+        write("delete", "Deleting event", { calendar: event.calendarId, uid: event.uid, scope: scope, occurrence: event.start });
+    }
     function write(command, what, payload) {
         if (writeProc.running) return;
         writeProc.what = what;
