@@ -10,6 +10,7 @@
   docket-helper delete JSON           {"calendar", "uid", "scope", "occurrence"}
                                       repeating events: scope "this" or "all"; occurrence is the
                                       clicked occurrence's start as the window shows it
+  docket-helper people CALENDAR UID   {"organizer": {"name", "email", "status"} or null, "attendees": [...]}
   docket-helper search QUERY          matches in title, location, description; next occurrence first
   docket-helper sync
 
@@ -223,9 +224,9 @@ def search_event(item, calendar, start, end, all_day, colors, query):
     }
 
 
-def event_file(calendar_id, uid):
+def event_file(calendar_id, uid, writing=True):
     """The .ics file in ~/.calendars that holds this UID (folded lines unfolded before matching)."""
-    if calendar_settings(config_path().read_text()).get(calendar_id, {}).get("readonly"):
+    if writing and calendar_settings(config_path().read_text()).get(calendar_id, {}).get("readonly"):
         raise HelperError("This calendar is read-only")
     folders = list(CALENDAR_ROOT.glob(f"*/{calendar_id}")) + list(CALENDAR_ROOT.glob(calendar_id))
     if not folders:
@@ -249,6 +250,20 @@ def series(calendar_id, uid):
         raise HelperError("Only changed occurrences of this event are in your calendar; "
                           "edit it where it was created")
     return path, cal, master, [v for v in vevents if v is not master]
+
+
+def people(calendar_id, uid):
+    """Organizer and attendees (khal's JSON output has no attendees)."""
+    _, text = event_file(calendar_id, uid, writing=False)
+    event = next((v for v in Calendar.from_ical(text).walk("VEVENT") if str(v.get("UID")) == uid), None)
+    if event is None:
+        raise HelperError(f"Event {uid} not found")
+    person = lambda address: {"name": str(address.params.get("CN", "")),
+                              "email": str(address).split(":", 1)[-1],
+                              "status": str(address.params.get("PARTSTAT", "")).lower()}
+    organizer = event.get("ORGANIZER")
+    return {"organizer": person(organizer) if organizer else None,
+            "attendees": [person(a) for a in listed(event.get("ATTENDEE"))]}
 
 
 def repeats(master, overrides):
@@ -473,6 +488,7 @@ def main(argv):
         "search": lambda: search(argv[1]),
         "update": lambda: update(argv[1]),
         "delete": lambda: delete(argv[1]),
+        "people": lambda: people(argv[1], argv[2]),
         "sync": lambda: {"synced": start_sync(wait=True)},
     }
     try:

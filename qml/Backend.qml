@@ -42,6 +42,13 @@ Item {
         searchProc.query = query;
         searchProc.running = true;
     }
+    // organizer and attendees of the event shown in the details popup
+    property var people: ({ organizer: null, attendees: [] })
+    function loadPeople(event) {
+        people = { organizer: null, attendees: [] };
+        peopleProc.wanted = JSON.stringify([event.calendarId, event.uid]);
+        if (!peopleProc.running) peopleProc.start();
+    }
     function create(event) { write("create", "Creating event", event); }
     function update(event) { write("update", "Saving event", event); }
     function remove(event, scope) {
@@ -118,6 +125,26 @@ Item {
                 if (root.parse(text, writeProc.what)) { root.error = ""; root.written(); root.reload(); }
             }
         }
+    }
+    Process {
+        id: peopleProc
+        // JSON [calendar, uid] last asked for, and the one this run is loading
+        property string wanted: ""
+        property string loading: ""
+        function start() {
+            loading = wanted;
+            command = [root.helper, "people"].concat(JSON.parse(wanted));
+            running = true;
+        }
+        stdout: StdioCollector {
+            onStreamFinished: {
+                const payload = root.parse(text, "Loading attendees");
+                if (payload && peopleProc.loading === peopleProc.wanted)
+                    root.people = { organizer: payload.organizer, attendees: payload.attendees };
+            }
+        }
+        // another event was opened while this ran: load that one
+        onExited: if (loading !== wanted) start()
     }
     // vdirsyncer's own timer syncs every 30 min; pick up its changes
     Timer {

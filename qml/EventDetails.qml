@@ -23,12 +23,18 @@ Popup {
         event = events.find(e => e.id === value.id) || value;
         confirmDelete = null;
         backend.error = "";
+        if (event.uid) backend.loadPeople(event);
         open();
     }
 
     Connections {
         target: root.backend
         function onWritten() { root.close(); }
+    }
+    readonly property var shownAttendees: backend.people.attendees.slice(0, 12)
+    function personText(person) {
+        const mark = { accepted: "✓", declined: "✗", tentative: "?" }[person.status] || "·";
+        return mark + " " + (person.name || person.email);
     }
     function whenText(e) {
         const start = Model.dateFromKey(Model.eventDateKey(e));
@@ -72,6 +78,47 @@ Popup {
                 color: root.theme.muted
                 font.family: root.theme.family
                 font.pixelSize: root.theme.fontSize
+            }
+        }
+        Text {
+            visible: !!root.backend.people.organizer
+            width: parent.width
+            elide: Text.ElideRight
+            text: root.backend.people.organizer
+                ? "Organizer: " + (root.backend.people.organizer.name || root.backend.people.organizer.email) : ""
+            color: root.theme.muted
+            font.family: root.theme.family
+            font.pixelSize: root.theme.fontSize - 1
+        }
+        Column {
+            visible: root.shownAttendees.length > 0
+            width: parent.width
+            spacing: 2
+            Text {
+                text: root.backend.people.attendees.length + " guests · "
+                    + root.backend.people.attendees.filter(a => a.status === "accepted").length + " accepted"
+                color: root.theme.muted
+                font.family: root.theme.family
+                font.pixelSize: root.theme.fontSize - 1
+            }
+            Repeater {
+                model: root.shownAttendees
+                Text {
+                    required property var modelData
+                    width: parent.width
+                    elide: Text.ElideRight
+                    text: root.personText(modelData)
+                    color: root.theme.foreground
+                    font.family: root.theme.family
+                    font.pixelSize: root.theme.fontSize - 1
+                }
+            }
+            Text {
+                visible: root.backend.people.attendees.length > root.shownAttendees.length
+                text: "and " + (root.backend.people.attendees.length - root.shownAttendees.length) + " more"
+                color: root.theme.muted
+                font.family: root.theme.family
+                font.pixelSize: root.theme.fontSize - 1
             }
         }
         Text {

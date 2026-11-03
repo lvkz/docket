@@ -25,6 +25,21 @@ END:VEVENT
 END:VCALENDAR
 """
 
+MEETING = """BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:meeting
+SUMMARY:Review
+DTSTART;TZID=America/Toronto:20261105T150000
+DTEND;TZID=America/Toronto:20261105T160000
+ORGANIZER;CN=Ana Example:mailto:ana@example.com
+ATTENDEE;CN=Bo Example;PARTSTAT=ACCEPTED:mailto:bo@example.com
+ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:cy@example.com
+END:VEVENT
+END:VCALENDAR
+"""
+
 BERLIN = """BEGIN:VCALENDAR
 VERSION:2.0
 PRODID:-//test//EN
@@ -62,6 +77,7 @@ class HelperTest(unittest.TestCase):
         folder.mkdir(parents=True)
         (folder / "weekly.ics").write_text(WEEKLY)
         (folder / "berlin.ics").write_text(BERLIN)
+        (folder / "meeting.ics").write_text(MEETING)
         (root / "khal.conf").write_text(CONFIG.format(root=root))
         self.env = {**os.environ, "TZ": "America/Toronto", "XDG_STATE_HOME": str(root / "state"),
                     "DOCKET_KHAL_CONFIG": str(root / "khal.conf"), "DOCKET_CALENDAR_ROOT": str(root)}
@@ -145,6 +161,17 @@ class HelperTest(unittest.TestCase):
         self.assertEqual(self.listed("berlin"), [("2026-11-04T12:00", "Call")])
         self.assertIn("TZID=Europe/Berlin:20261104T180000",
                       (Path(self.dir.name) / "account/test/berlin.ics").read_text())
+
+    def test_people(self):
+        found = self.run_helper("people", "test", "meeting")
+        self.assertEqual(found["organizer"], {"name": "Ana Example", "email": "ana@example.com",
+                                              "status": ""})
+        self.assertEqual(found["attendees"], [
+            {"name": "Bo Example", "email": "bo@example.com", "status": "accepted"},
+            {"name": "", "email": "cy@example.com", "status": "needs-action"}])
+        self.assertEqual(self.run_helper("people", "test", "weekly"),
+                         {"ok": True, "organizer": None, "attendees": []})
+        self.assertFalse(self.run_helper("people", "test", "missing")["ok"])
 
 
 if __name__ == "__main__":
