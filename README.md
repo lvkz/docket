@@ -40,7 +40,11 @@ New events (optionally repeating daily/weekly/monthly/yearly, with notes) go thr
 `khal new`. Events can be edited or deleted from their details popup: Docket rewrites or
 removes the event's `.ics` file in `~/.calendars` (bumping `SEQUENCE`), after copying the
 original to `~/.local/state/docket/backup/`. Every write then starts `vdirsyncer-sync.service`.
-For a repeating event you pick **this one** (stored as an exception to the series) or **all**.
+Pick another calendar in the edit form to move an event there (not invitations, and not a single
+occurrence of a repeating event). In the week view, drag an event to move it (15-minute steps,
+other days included) or drag its bottom edge to change when it ends; a repeating event moves
+only that occurrence. For a repeating event you pick **this one** (stored as an exception to
+the series) or **all**.
 Changing all occurrences can change their time but not their day, and a repeating event can't
 switch between all-day and timed. Events crossing midnight and read-only calendars are not
 editable; use Google Calendar or iCloud for those. Restore a change by copying its backup back
@@ -76,7 +80,7 @@ WantedBy=timers.target
 
 `./install` (symlinks into `~/.local/bin`, `~/.local/share/applications`,
 `~/.config/systemd/user`, enables the reminder timer).
-Test: `python3 tests/test_notify.py && python3 tests/test_helper.py` (the second needs khal)
+Test: `tests/run` (needs khal and Qt 6's `qmltestrunner`; the week view test runs offscreen)
 
 ## Adding a calendar
 

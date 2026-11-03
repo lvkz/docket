@@ -56,6 +56,9 @@ CONFIG = """[calendars]
 [[test]]
 path = {root}/account/test
 type = calendar
+[[other]]
+path = {root}/account/other
+type = calendar
 [sqlite]
 path = {root}/khal.db
 [locale]
@@ -75,6 +78,7 @@ class HelperTest(unittest.TestCase):
         root = Path(self.dir.name)
         folder = root / "account/test"
         folder.mkdir(parents=True)
+        (root / "account/other").mkdir()
         (folder / "weekly.ics").write_text(WEEKLY)
         (folder / "berlin.ics").write_text(BERLIN)
         (folder / "meeting.ics").write_text(MEETING)
@@ -92,9 +96,10 @@ class HelperTest(unittest.TestCase):
     def write(self, command, **fields):
         return self.run_helper(command, json.dumps({"calendar": "test", **fields}))
 
-    def listed(self, uid="weekly"):
+    def listed(self, uid="weekly", calendar="test"):
         events = self.run_helper("events", "2026-11-01", "2026-12-01")["events"]
-        return sorted((e["start"][:16], e["title"]) for e in events if e["uid"] == uid)
+        return sorted((e["start"][:16], e["title"]) for e in events
+                      if e["uid"] == uid and e["calendarId"] == calendar)
 
     def edit(self, scope, occurrence, start, end, title):
         return self.write("update", uid="weekly", scope=scope, occurrence=occurrence, title=title,
@@ -162,6 +167,30 @@ class HelperTest(unittest.TestCase):
         self.assertIn("TZID=Europe/Berlin:20261104T180000",
                       (Path(self.dir.name) / "account/test/berlin.ics").read_text())
 
+    def test_move_to_another_calendar(self):
+        result = self.write("update", uid="berlin", title="Call", allDay=False, moveTo="other",
+                            start="2026-11-04T10:00", end="2026-11-04T11:00")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.listed("berlin"), [])
+        self.assertEqual(self.listed("berlin", "other"), [("2026-11-04T10:00", "Call")])
+        self.assertFalse((Path(self.dir.name) / "account/test/berlin.ics").exists())
+
+    def test_move_whole_series_only(self):
+        args = dict(uid="weekly", title="Standup", allDay=False, moveTo="other",
+                    occurrence="2026-11-02T10:00:00-05:00",
+                    start="2026-11-02T10:00", end="2026-11-02T11:00")
+        self.assertFalse(self.write("update", scope="this", **args)["ok"])
+        self.assertEqual(len(self.listed()), 4)
+        self.assertTrue(self.write("update", scope="all", **args)["ok"])
+        self.assertEqual(len(self.listed("weekly", "other")), 4)
+
+    def test_invitations_do_not_move(self):
+        result = self.write("update", uid="meeting", title="Review", allDay=False, moveTo="other",
+                            start="2026-11-05T15:00", end="2026-11-05T16:00")
+        self.assertFalse(result["ok"])
+        self.assertIn("Invitations", result["error"])
+        self.assertEqual(self.listed("meeting"), [("2026-11-05T15:00", "Review")])
+
     def test_people(self):
         found = self.run_helper("people", "test", "meeting")
         self.assertEqual(found["organizer"], {"name": "Ana Example", "email": "ana@example.com",
@@ -172,6 +201,7 @@ class HelperTest(unittest.TestCase):
         self.assertEqual(self.run_helper("people", "test", "weekly"),
                          {"ok": True, "organizer": None, "attendees": []})
         self.assertFalse(self.run_helper("people", "test", "missing")["ok"])
+
 
 
 if __name__ == "__main__":

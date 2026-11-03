@@ -24,7 +24,7 @@ Popup {
     ]
 
     // hour: start hour to prefill (double-click on the grid); omitted = next full hour
-    // prefill from an existing event; calendar and repeat stay as they are
+    // prefill from an existing event; repeat stays as it is
     function edit(event, editScope) {
         start(Model.eventDateKey(event));
         editing = event;
@@ -78,6 +78,7 @@ Popup {
         if (editing) {
             backend.update({
                 calendar: editing.calendarId,
+                moveTo: writable[calendar.currentIndex].id,
                 uid: editing.uid,
                 scope: scope,
                 occurrence: editing.start,
@@ -161,7 +162,8 @@ Popup {
         FormLabel { text: "Title" }
         Field { id: title; placeholderText: "What" }
         FormLabel { text: "Calendar" }
-        Picker { id: calendar; enabled: !root.editing; model: root.writable.map(c => c.calendarName) }
+        // one occurrence of a repeating event can't move on its own
+        Picker { id: calendar; enabled: root.scope !== "this" || !root.editing; model: root.writable.map(c => c.calendarName) }
         FormLabel { text: "Date" }
         Field { id: date; placeholderText: "YYYY-MM-DD" }
         FormLabel { text: "All day" }

@@ -6,7 +6,7 @@
   docket-helper create JSON           {"calendar", "title", "start", "end", "allDay", "location",
                                        "description", "repeat", "until"}
   docket-helper update JSON           {"calendar", "uid", "title", "start", "end", "allDay", "location",
-                                       "description", "scope", "occurrence"}
+                                       "description", "scope", "occurrence", "moveTo"}
   docket-helper delete JSON           {"calendar", "uid", "scope", "occurrence"}
                                       repeating events: scope "this" or "all"; occurrence is the
                                       clicked occurrence's start as the window shows it
@@ -148,6 +148,7 @@ def config_path():
     return Path(os.environ.get("DOCKET_KHAL_CONFIG") or Path.home() / ".config/khal/config")
 
 
+
 # ponytail: reads khal's own cache DB (layout version 5) because `khal search` prints every
 # past occurrence and takes seconds; if khal changes the layout, this fails loudly below.
 def search(query):
@@ -224,19 +225,24 @@ def search_event(item, calendar, start, end, all_day, colors, query):
     }
 
 
-def event_file(calendar_id, uid, writing=True):
-    """The .ics file in ~/.calendars that holds this UID (folded lines unfolded before matching)."""
+def calendar_folder(calendar_id, writing):
     if writing and calendar_settings(config_path().read_text()).get(calendar_id, {}).get("readonly"):
         raise HelperError("This calendar is read-only")
     folders = list(CALENDAR_ROOT.glob(f"*/{calendar_id}")) + list(CALENDAR_ROOT.glob(calendar_id))
     if not folders:
         raise HelperError(f"No folder for calendar {calendar_id} under {CALENDAR_ROOT}")
+    return folders[0]
+
+
+def event_file(calendar_id, uid, writing=True):
+    """The .ics file in ~/.calendars that holds this UID (folded lines unfolded before matching)."""
+    folder = calendar_folder(calendar_id, writing)
     needle = f"UID:{uid}"
-    for path in folders[0].glob("*.ics"):
+    for path in folder.glob("*.ics"):
         text = path.read_text(errors="replace")
         if needle in text.replace("\r\n ", "").replace("\n ", ""):
             return path, text
-    raise HelperError(f"Event {uid} not found in {folders[0]}; try Sync first")
+    raise HelperError(f"Event {uid} not found in {folder}; try Sync first")
 
 
 def series(calendar_id, uid):
@@ -350,13 +356,33 @@ def local_zone():
     return ZoneInfo(zone)
 
 
-def save(path, cal):
+def save(path, cal, target=None):
+    """Write cal over path, or to target and then remove path (moving between calendars)."""
     cal.add_missing_timezones()
     saved = backup(path)
-    tmp = path.with_suffix(".docket-tmp")
+    target = target or path
+    tmp = target.with_suffix(".docket-tmp")
     tmp.write_bytes(cal.to_ical())
-    os.replace(tmp, path)
+    os.replace(tmp, target)
+    if target != path:
+        path.unlink()
     return saved
+
+
+def move_target(data, path, master):
+    """Where the edited event goes when the form picked another calendar, or None."""
+    calendar_id = data.get("moveTo") or data["calendar"]
+    if calendar_id == data["calendar"]:
+        return None
+    if data.get("scope") == "this":
+        raise HelperError("Only a whole repeating event can move to another calendar")
+    if master.get("ATTENDEE"):
+        raise HelperError("Invitations can't move to another calendar; "
+                          "the organizer's copy would stay where it is")
+    target = calendar_folder(calendar_id, writing=True) / path.name
+    if target.exists():
+        raise HelperError(f"{target} already exists")
+    return target
 
 
 def shift_series(master, overrides, delta):
@@ -392,7 +418,8 @@ def update(payload):
         title = update_series(master, overrides, data)
     else:
         raise HelperError("Say whether to change this occurrence or all of them")
-    return {"updated": title, "backup": save(path, cal), "synced": start_sync(wait=False)}
+    saved = save(path, cal, move_target(data, path, master))
+    return {"updated": title, "backup": saved, "synced": start_sync(wait=False)}
 
 
 def update_occurrence(cal, master, overrides, data):

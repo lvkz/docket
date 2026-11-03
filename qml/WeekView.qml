@@ -15,6 +15,20 @@ Item {
     signal eventClicked(var event)
     signal dayClicked(string key)
     signal createAt(string key, int hour)
+    // a timed event was dragged; start/end are local "YYYY-MM-DDTHH:MM"
+    signal eventMoved(var event, string start, string end)
+    // ids of calendars that can be written (only their events can be dragged)
+    property var writableIds: []
+
+    // iso moved by whole days (keeps wall time across DST) and minutes
+    function shifted(iso, days, minutes) {
+        const d = new Date(iso);
+        d.setDate(d.getDate() + days);
+        d.setMinutes(d.getMinutes() + minutes);
+        return Model.keyForDate(d) + "T" + Model.pad2(d.getHours()) + ":" + Model.pad2(d.getMinutes());
+    }
+    // pixels to minutes, snapped to 15
+    function snapped(px) { return Math.round(px / hourHeight * 4) * 15; }
 
     readonly property int hourCount: dayEndHour - dayStartHour
     // date keys of the columns: the whole week, or 3 days on narrow windows (set by the window)
@@ -140,6 +154,9 @@ Item {
                 x: root.gutter + index * root.colWidth
                 width: root.colWidth
                 height: grid.contentHeight
+                // a block dragged into the next columns must draw above them
+                z: dragCount > 0 ? 1 : 0
+                property int dragCount: 0
                 Rectangle { width: 1; height: parent.height; color: root.theme.border; opacity: 0.5 }
                 // double-click empty space: new event starting at that hour (events sit above and take their own clicks)
                 MouseArea {
@@ -153,11 +170,29 @@ Item {
                         event: modelData.event
                         theme: root.theme
                         highlightId: root.highlightId
+                        // events crossing midnight are drawn in pieces; leave those to the form
+                        movable: root.writableIds.indexOf(event.calendarId) >= 0
+                            && Model.localDateKeyFromIso(event.end) === column.modelData
+                            && Model.eventDateKey(event) === column.modelData
                         x: 2 + modelData.lane * (column.width - 4) / modelData.lanes
                         y: (modelData.startHour - root.dayStartHour) * root.hourHeight + 1
                         width: (column.width - 4) / modelData.lanes - 2
-                        height: Math.max(18, (modelData.endHour - modelData.startHour) * root.hourHeight - 2)
+                        height: Math.max(18, (modelData.endHour - modelData.startHour) * root.hourHeight - 2 + dragH)
                         onClicked: event => root.eventClicked(event)
+                        onDraggingChanged: column.dragCount += dragging ? 1 : -1
+                        onMoved: (dx, dy) => {
+                            const days = Math.round(dx / root.colWidth), minutes = root.snapped(dy);
+                            if (days || minutes)
+                                root.eventMoved(event, root.shifted(event.start, days, minutes),
+                                                root.shifted(event.end, days, minutes));
+                        }
+                        onResized: dy => {
+                            const length = (new Date(event.end) - new Date(event.start)) / 60000;
+                            const minutes = Math.max(15 - length, root.snapped(dy));
+                            if (minutes)
+                                root.eventMoved(event, root.shifted(event.start, 0, 0),
+                                                root.shifted(event.end, 0, minutes));
+                        }
                     }
                 }
                 Rectangle {

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Run every test. The QML test is offscreen: no window, no mouse or keyboard input.
+set -euo pipefail
+cd "$(dirname -- "$0")/.."
+python3 tests/test_notify.py
+python3 tests/test_helper.py
+# Arch's /usr/bin/qmltestrunner wrapper prints nothing; call Qt 6's runner directly
+runner=${QMLTESTRUNNER:-/usr/lib/qt6/bin/qmltestrunner}
+out=$(mktemp)
+trap 'rm -f -- "$out"' EXIT
+status=0
+TZ=America/Toronto QT_QPA_PLATFORM=offscreen "$runner" -input tests \
+  -o "$out,txt" >/dev/null 2>&1 || status=$?
+grep -E '^(FAIL|Totals)|^   (Actual|Expected|Loc)' "$out"
+exit "$status"
