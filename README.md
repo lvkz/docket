@@ -99,7 +99,6 @@ a = "icloud_local"
 b = "icloud_remote"
 collections = ["from b"]          # every calendar on the account; or list ids from `discover`
 conflict_resolution = "b wins"
-metadata = ["displayname", "color"]
 
 [storage icloud_local]
 type = "filesystem"
@@ -130,7 +129,6 @@ a = "google_work_local"
 b = "google_work_remote"
 collections = ["from b"]
 conflict_resolution = "b wins"
-metadata = ["displayname", "color"]
 
 [storage google_work_local]
 type = "filesystem"
@@ -168,10 +166,17 @@ url = "https://example.com/holidays.ics"
 ```sh
 vdirsyncer discover google_work    # lists the calendars it found; Google opens a browser to authorize
 vdirsyncer sync google_work
-vdirsyncer metasync google_work   # fetches calendar names and colors
 ```
 
 Afterwards each calendar is a folder such as `~/.calendars/work/you@example.com/`.
+
+**Don't run `vdirsyncer metasync`** (or add `metadata = ["displayname"]` to a pair) on a setup
+that already works. It writes each calendar's server name into a `displayname` file, and khal
+then uses that name as the calendar's id instead of the folder name. Anything keyed by the old
+id breaks: khal refuses to start if `default_calendar` uses it, and Docket's per-calendar
+colors, names, hiding and reminder settings stop applying. Renaming the calendar on the server
+later would change the id again. Give calendars readable names in Docket's Settings →
+Calendars instead.
 
 ### 3. khal (`~/.config/khal/config`)
 
