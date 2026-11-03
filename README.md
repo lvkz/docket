@@ -23,15 +23,18 @@ vdirsyncer and read through khal. No accounts of its own: see
 - Settings (toolbar button, or `qs ipc -p qml call docket settings [week|calendars|reminders]`):
   - Week view: hours shown in the grid.
   - Calendars: rename, hide, and color each calendar (theme palette, intense variant, or `#rrggbb`).
-  - Reminders: lead time (off / 5 / 10 / 15 / 30 min) and which calendars notify.
+  - Reminders: default lead time (off / 5 / 10 / 15 / 30 min) and which calendars notify.
 
   All saved to `~/.config/docket/config.json`, which can also be edited by hand:
   `dayStartHour`, `dayEndHour`, `calendarColors` and `calendarNames` (`{"<calendar id>": ...}`),
   `hiddenCalendars` and `reminderCalendarsOff` (lists of calendar ids), `reminderMinutes`.
-- `docket-notify`: run every minute by `docket-notify.timer`. Notifies before timed events,
-  using the Reminders settings from `config.json` (10 minutes, every calendar, if unset).
+- `docket-notify`: run every minute by `docket-notify.timer`. Uses each event's own pop-up
+  alerts (set on a phone or in Google) when it has any; otherwise timed events get the default
+  lead time from `config.json` (10 minutes if unset) and all-day events a reminder at 09:00 that
+  day. "Off" turns every reminder off. khal doesn't report sound-only alerts or ones set to an
+  exact date and time, and an event set to "no alert" still gets the default.
 - `docket-helper`: the JSON bridge the window uses (`events`, `calendars`, `create`, `update`,
-  `delete`, `search`, `sync`).
+  `delete`, `people`, `search`, `sync`).
 
 New events (optionally repeating daily/weekly/monthly/yearly, with notes) go through
 `khal new`. Events can be edited or deleted from their details popup: Docket rewrites or
