@@ -1,5 +1,7 @@
 # Docket
 
+![Docket week view with sidebar (sample calendars)](docs/screenshot.png)
+
 Standalone calendar window (Quickshell) and reminder notifier for calendars synced by
 vdirsyncer and read through khal. No accounts of its own: see
 [Adding a calendar](#adding-a-calendar).
