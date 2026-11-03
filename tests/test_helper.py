@@ -135,6 +135,20 @@ class HelperTest(unittest.TestCase):
                                          ("2026-11-16T14:00", "Moved"),
                                          ("2026-11-23T09:30", "Series")])
 
+    def test_edit_series_from_a_moved_occurrence(self):
+        self.edit("this", "2026-11-16T10:00:00-05:00", "2026-11-16T11:00", "2026-11-16T11:30", "Standup")
+        # the form shows the moved occurrence's 11:00-11:30; only the title changes
+        result = self.edit("all", "2026-11-16T11:00:00-05:00",
+                           "2026-11-16T11:00", "2026-11-16T11:30", "Daily")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.listed(), [("2026-11-02T10:00", "Daily"),
+                                         ("2026-11-09T10:00", "Daily"),
+                                         ("2026-11-16T11:00", "Daily"),
+                                         ("2026-11-23T10:00", "Daily")])
+        ends = [e["end"][11:16] for e in self.run_helper("events", "2026-11-01", "2026-12-01")["events"]
+                if e["uid"] == "weekly"]
+        self.assertEqual(ends, ["11:00", "11:00", "11:30", "11:00"])
+
     def test_series_cannot_move_to_another_day(self):
         result = self.edit("all", "2026-11-02T10:00:00-05:00",
                            "2026-11-03T10:00", "2026-11-03T11:00", "Standup")
@@ -202,6 +216,11 @@ class HelperTest(unittest.TestCase):
                          {"ok": True, "organizer": None, "attendees": []})
         self.assertFalse(self.run_helper("people", "test", "missing")["ok"])
 
+    def test_search_reads_the_configured_database(self):
+        self.listed()  # any khal command fills the database
+        found = self.run_helper("search", "review")
+        self.assertTrue(found["ok"], found)
+        self.assertEqual([e["uid"] for e in found["events"]], ["meeting"])
 
 
 if __name__ == "__main__":

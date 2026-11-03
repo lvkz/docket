@@ -46,6 +46,8 @@ Popup {
     anchors.centerIn: Overlay.overlay
     width: Math.min(520, parent.width - 40)
     modal: true
+    // Escape only closes a popup that has focus; nothing inside this one takes it
+    focus: true
     padding: 20
     background: Rectangle { color: root.theme.background; border.color: root.theme.border; radius: 6 }
 
