@@ -10,6 +10,10 @@ Item {
     property string highlightId: ""
     // month title shown above the day columns (the toolbar hides its own in this view)
     property string title: ""
+    // ‹ › around the title, for windows too narrow for the toolbar's own; the title goes to today
+    property bool navigation: false
+    signal stepped(int delta)
+    signal todayClicked()
     required property int dayStartHour
     required property int dayEndHour
     signal eventClicked(var event)
@@ -48,16 +52,16 @@ Item {
         id: titleRow
         x: root.gutter
         width: root.width - root.gutter
-        height: root.title !== "" ? titleLabel.implicitHeight + 10 : 0
+        height: root.title !== "" ? titleNav.implicitHeight + 10 : 0
         visible: root.title !== ""
-        Text {
-            id: titleLabel
+        TitleNav {
+            id: titleNav
             anchors.horizontalCenter: parent.horizontalCenter
-            text: root.title
-            color: root.theme.foreground
-            font.family: root.theme.family
-            font.pixelSize: root.theme.fontSize + 4
-            font.bold: true
+            theme: root.theme
+            title: root.title
+            navigation: root.navigation
+            onStepped: delta => root.stepped(delta)
+            onTodayClicked: root.todayClicked()
         }
     }
     Row {
