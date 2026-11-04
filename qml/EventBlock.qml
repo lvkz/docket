@@ -7,7 +7,15 @@ Rectangle {
     property var event: ({})
     required property var theme
     property bool compact: false
+    // week grid: drag the body to move, the bottom edge to resize (pixel offsets on release)
+    property bool movable: false
+    readonly property bool dragging: mouse.dragging
+    property real dragX: 0
+    property real dragY: 0
+    property real dragH: 0
     signal clicked(var event)
+    signal moved(real dx, real dy)
+    signal resized(real dy)
 
     readonly property color tint: theme.calendarColor(event.calendarColor)
     readonly property string startText: Model.formatTime(event.start, false, "24h")
@@ -27,7 +35,8 @@ Rectangle {
         highlighted ? 0.6 : mouse.containsMouse ? 0.45 : 0.28))
     border.color: highlighted ? tint : "transparent"
     border.width: highlighted ? 2 : 0
-    z: highlighted ? 1 : 0
+    z: dragging ? 2 : highlighted ? 1 : 0
+    transform: Translate { x: root.dragX; y: root.dragY }
     clip: true
     opacity: highlighted ? 1 : Model.eventIsPast(event, new Date()) ? 0.6 : 1
     Behavior on color { ColorAnimation { duration: 120 } }
@@ -73,9 +82,36 @@ Rectangle {
     }
     MouseArea {
         id: mouse
+        // scene coordinates: the block itself moves while dragged
+        property point pressedAt
+        property bool dragging: false
+        property bool resizing: false
         anchors.fill: parent
         hoverEnabled: true
-        cursorShape: Qt.PointingHandCursor
-        onClicked: root.clicked(root.event)
+        preventStealing: root.movable
+        cursorShape: root.movable && (resizing || mouseY > height - 6) ? Qt.SizeVerCursor
+            : dragging ? Qt.ClosedHandCursor : Qt.PointingHandCursor
+        onPressed: event => {
+            pressedAt = mapToItem(null, event.x, event.y);
+            dragging = false;
+            resizing = root.movable && event.y > height - 6;
+        }
+        onPositionChanged: event => {
+            if (!pressed || !root.movable) return;
+            const at = mapToItem(null, event.x, event.y);
+            const dx = at.x - pressedAt.x, dy = at.y - pressedAt.y;
+            if (!dragging && Math.abs(dx) + Math.abs(dy) < 5) return;
+            dragging = true;
+            if (resizing) root.dragH = dy;
+            else { root.dragX = dx; root.dragY = dy; }
+        }
+        onReleased: {
+            if (dragging) {
+                if (resizing) root.resized(root.dragH);
+                else root.moved(root.dragX, root.dragY);
+            }
+            root.dragX = 0; root.dragY = 0; root.dragH = 0;
+        }
+        onClicked: if (!dragging) root.clicked(root.event)
     }
 }

@@ -83,6 +83,16 @@ ShellRoot {
         selectedKey = Model.eventDateKey(event);
         details.show(event);
     }
+    // dragged in the week view; a repeating event moves this occurrence only
+    function moveEvent(event, start, end) {
+        const full = events.find(e => e.id === event.id) || event;
+        backend.update({
+            calendar: full.calendarId, uid: full.uid, title: full.title,
+            location: full.location || "", description: full.description || "",
+            allDay: false, start: start, end: end,
+            scope: full.repeats ? "this" : "", occurrence: full.start,
+        });
+    }
     readonly property var events: backend.events
         .filter(e => hiddenCalendars.indexOf(e.calendarId) < 0)
         .map(e => personalize(e, e.calendarId))
@@ -410,6 +420,8 @@ ShellRoot {
                 onEventClicked: event => details.show(event)
                 onDayClicked: key => { root.selectedKey = key; root.view = "agenda"; }
                 onCreateAt: (key, hour) => form.start(key, hour)
+                writableIds: root.calendars.filter(c => !c.readonly).map(c => c.id)
+                onEventMoved: (event, start, end) => root.moveEvent(event, start, end)
             }
         }
         Component {

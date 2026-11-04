@@ -6,7 +6,7 @@
   docket-helper create JSON           {"calendar", "title", "start", "end", "allDay", "location",
                                        "description", "repeat", "until"}
   docket-helper update JSON           {"calendar", "uid", "title", "start", "end", "allDay", "location",
-                                       "description", "scope", "occurrence"}
+                                       "description", "scope", "occurrence", "moveTo"}
   docket-helper delete JSON           {"calendar", "uid", "scope", "occurrence"}
                                       repeating events: scope "this" or "all"; occurrence is the
                                       clicked occurrence's start as the window shows it
@@ -38,7 +38,6 @@ KHAL_FORMAT = "%Y-%m-%d %H:%M"  # khal [locale] datetimeformat
 FIELDS = ["uid", "title", "start", "end", "all-day", "location", "description",
           "calendar", "calendar-color", "repeat-symbol", "status"]
 CALENDAR_ROOT = Path(os.environ.get("DOCKET_CALENDAR_ROOT") or Path.home() / ".calendars")
-KHAL_DB = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "khal/khal.db"
 KHAL_DB_VERSION = 5
 REPEATS = {"daily", "weekly", "monthly", "yearly"}
 SEARCH_LIMIT = 50
@@ -148,15 +147,29 @@ def config_path():
     return Path(os.environ.get("DOCKET_KHAL_CONFIG") or Path.home() / ".config/khal/config")
 
 
+def khal_db():
+    """khal's [sqlite] path, else its default $XDG_CACHE_HOME/khal/khal.db."""
+    section = None
+    for raw in config_path().read_text().splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if line.startswith("["):
+            section = line
+        elif section == "[sqlite]" and line.split("=", 1)[0].strip() == "path" and "=" in line:
+            value = line.split("=", 1)[1].strip().strip("\"'")
+            return Path(os.path.expanduser(os.path.expandvars(value)))
+    return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "khal/khal.db"
+
+
 # ponytail: reads khal's own cache DB (layout version 5) because `khal search` prints every
 # past occurrence and takes seconds; if khal changes the layout, this fails loudly below.
 def search(query):
     query = query.strip()
     if len(query) < 2:
         return {"events": []}
-    if not KHAL_DB.exists():
-        raise HelperError(f"khal's database {KHAL_DB} is missing; run any khal command once")
-    db = sqlite3.connect(f"file:{KHAL_DB}?mode=ro", uri=True)
+    khal_db_path = khal_db()
+    if not khal_db_path.exists():
+        raise HelperError(f"khal's database {khal_db_path} is missing; run any khal command once")
+    db = sqlite3.connect(f"file:{khal_db_path}?mode=ro", uri=True)
     version = db.execute("SELECT version FROM version").fetchone()[0]
     if version != KHAL_DB_VERSION:
         raise HelperError(f"khal database version {version} is not supported (expected {KHAL_DB_VERSION})")
@@ -224,19 +237,24 @@ def search_event(item, calendar, start, end, all_day, colors, query):
     }
 
 
-def event_file(calendar_id, uid, writing=True):
-    """The .ics file in ~/.calendars that holds this UID (folded lines unfolded before matching)."""
+def calendar_folder(calendar_id, writing):
     if writing and calendar_settings(config_path().read_text()).get(calendar_id, {}).get("readonly"):
         raise HelperError("This calendar is read-only")
     folders = list(CALENDAR_ROOT.glob(f"*/{calendar_id}")) + list(CALENDAR_ROOT.glob(calendar_id))
     if not folders:
         raise HelperError(f"No folder for calendar {calendar_id} under {CALENDAR_ROOT}")
+    return folders[0]
+
+
+def event_file(calendar_id, uid, writing=True):
+    """The .ics file in ~/.calendars that holds this UID (folded lines unfolded before matching)."""
+    folder = calendar_folder(calendar_id, writing)
     needle = f"UID:{uid}"
-    for path in folders[0].glob("*.ics"):
+    for path in folder.glob("*.ics"):
         text = path.read_text(errors="replace")
         if needle in text.replace("\r\n ", "").replace("\n ", ""):
             return path, text
-    raise HelperError(f"Event {uid} not found in {folders[0]}; try Sync first")
+    raise HelperError(f"Event {uid} not found in {folder}; try Sync first")
 
 
 def series(calendar_id, uid):
@@ -350,13 +368,33 @@ def local_zone():
     return ZoneInfo(zone)
 
 
-def save(path, cal):
+def save(path, cal, target=None):
+    """Write cal over path, or to target and then remove path (moving between calendars)."""
     cal.add_missing_timezones()
     saved = backup(path)
-    tmp = path.with_suffix(".docket-tmp")
+    target = target or path
+    tmp = target.with_suffix(".docket-tmp")
     tmp.write_bytes(cal.to_ical())
-    os.replace(tmp, path)
+    os.replace(tmp, target)
+    if target != path:
+        path.unlink()
     return saved
+
+
+def move_target(data, path, master):
+    """Where the edited event goes when the form picked another calendar, or None."""
+    calendar_id = data.get("moveTo") or data["calendar"]
+    if calendar_id == data["calendar"]:
+        return None
+    if data.get("scope") == "this":
+        raise HelperError("Only a whole repeating event can move to another calendar")
+    if master.get("ATTENDEE"):
+        raise HelperError("Invitations can't move to another calendar; "
+                          "the organizer's copy would stay where it is")
+    target = calendar_folder(calendar_id, writing=True) / path.name
+    if target.exists():
+        raise HelperError(f"{target} already exists")
+    return target
 
 
 def shift_series(master, overrides, delta):
@@ -392,7 +430,8 @@ def update(payload):
         title = update_series(master, overrides, data)
     else:
         raise HelperError("Say whether to change this occurrence or all of them")
-    return {"updated": title, "backup": save(path, cal), "synced": start_sync(wait=False)}
+    saved = save(path, cal, move_target(data, path, master))
+    return {"updated": title, "backup": saved, "synced": start_sync(wait=False)}
 
 
 def update_occurrence(cal, master, overrides, data):
@@ -407,18 +446,43 @@ def update_occurrence(cal, master, overrides, data):
     return set_fields(override, data, start, end)
 
 
+def span(event):
+    start = event.decoded("DTSTART")
+    if "DTEND" in event:
+        return start, event.decoded("DTEND")
+    if "DURATION" in event:
+        return start, start + event.decoded("DURATION")
+    return start, start + (timedelta(0) if isinstance(start, datetime) else timedelta(days=1))
+
+
 def update_series(master, overrides, data):
-    first = master.decoded("DTSTART")
-    recurrence_id, _ = find_occurrence(master, overrides, data["occurrence"])
+    first, last = span(master)
+    recurrence_id, override = find_occurrence(master, overrides, data["occurrence"])
+    # the form shows the occurrence it was opened from, which an override may have moved
+    shown_start, shown_end = (span(override) if override is not None
+                              else (recurrence_id, recurrence_id + (last - first)))
     start, end = form_times(data, first)
     wall = lambda value: value.replace(tzinfo=None) if isinstance(value, datetime) else value
-    delta = wall(start) - wall(recurrence_id)
-    if wall(start).toordinal() != wall(recurrence_id).toordinal():
+    if wall(start).toordinal() != wall(shown_start).toordinal():
         raise HelperError("Moving every occurrence to another day isn't supported; "
                           "change the time, or edit this occurrence only")
+    delta = wall(start) - wall(shown_start)
     if delta:
         shift_series(master, overrides, delta)
-    return set_fields(master, data, first + delta, first + delta + (end - start))
+    follow_series(master, overrides, data)
+    return set_fields(master, data, first + delta, last + (wall(end) - wall(shown_end)))
+
+
+def follow_series(master, overrides, data):
+    """Overrides keep a title, location or notes of their own; the rest follow the series."""
+    for key, field in (("SUMMARY", "title"), ("LOCATION", "location"), ("DESCRIPTION", "description")):
+        old, new = str(master.get(key, "")), data.get(field, "").strip()
+        for override in overrides:
+            if old != new and str(override.get(key, "")) == old:
+                override.pop(key, None)
+                if new:
+                    override.add(key, new)
+                touch(override)
 
 
 def delete(payload):
