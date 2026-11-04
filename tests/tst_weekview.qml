@@ -45,12 +45,26 @@ Item {
 
     SignalSpy { id: moved; target: week; signalName: "eventMoved" }
     SignalSpy { id: clicked; target: week; signalName: "eventClicked" }
+    SignalSpy { id: stepped; target: week; signalName: "stepped" }
+    SignalSpy { id: today; target: week; signalName: "todayClicked" }
 
     TestCase {
         name: "WeekViewDrag"
         when: windowShown
 
-        function init() { moved.clear(); clicked.clear(); }
+        function init() { moved.clear(); clicked.clear(); stepped.clear(); today.clear(); }
+
+        // the first visible item under `item` that `test` accepts
+        function find(test, item) {
+            item = item || week;
+            for (let i = 0; i < item.children.length; ++i) {
+                const child = item.children[i];
+                if (child.visible && test(child)) return child;
+                const found = find(test, child);
+                if (found) return found;
+            }
+            return null;
+        }
 
         // the block drawn for `title` (the first one, for events split across days)
         function block(title, item) {
@@ -114,6 +128,26 @@ Item {
             drag("Locked", 20, 20, week.colWidth, week.hourHeight);
             verify(!block("Late").movable);
             compare(moved.count, 0);
+        }
+
+        function test_title_navigation_when_narrow() {
+            week.title = "November 2026";
+            const arrow = text => find(c => c.text === text && c.clicked !== undefined);
+            verify(!arrow("‹"), "no arrows until navigation is on");
+            week.navigation = true;
+            waitForRendering(week);
+            try {
+                mouseClick(arrow("‹"));
+                mouseClick(arrow("›"));
+                compare(stepped.count, 2);
+                compare(stepped.signalArguments[0][0], -1);
+                compare(stepped.signalArguments[1][0], 1);
+                mouseClick(find(c => c.text === "November 2026"));
+                compare(today.count, 1);
+            } finally {
+                week.navigation = false;
+                week.title = "";
+            }
         }
     }
 }

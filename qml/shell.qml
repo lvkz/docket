@@ -204,8 +204,10 @@ ShellRoot {
                 readonly property bool wide: window.width >= 960
                 readonly property real fullLeftWidth: todayButton.implicitWidth + navButtons.implicitWidth
                     + newButton.implicitWidth + 16
+                // agenda and month title the toolbar; the week view titles its own columns when narrow
+                readonly property bool showsTitle: root.view !== "week" || wide
                 readonly property bool compactLeft: !wide
-                    && fullLeftWidth + 8 + (titleText.visible ? 120 : 0) > viewSwitch.centered - 16
+                    && fullLeftWidth + 8 + (showsTitle ? 120 : 0) > viewSwitch.centered - 16
                 Item {
                     id: leftGroup
                     width: toolbar.wide ? 272 : toolbar.compactLeft ? newButton.width : toolbar.fullLeftWidth
@@ -254,8 +256,9 @@ ShellRoot {
                 }
                 Text {
                     id: titleText
-                    // week view: here when wide, centered above the day columns when narrow
-                    visible: root.view !== "week" || toolbar.wide
+                    // week view: here when wide, centered above the day columns when narrow;
+                    // compact: above the view, with ‹ ›
+                    visible: toolbar.showsTitle && !toolbar.compactLeft
                     x: leftGroup.width + 8
                     width: viewSwitch.x - x - 16
                     height: parent.height
@@ -374,9 +377,21 @@ ShellRoot {
                     hiddenCalendars: root.hiddenCalendars.filter(x => x !== id).concat(shown ? [] : [id])
                 })
             }
-            Loader {
+            TitleNav {
+                id: compactTitle
+                visible: toolbar.compactLeft && (root.view === "agenda" || root.view === "month")
                 anchors.top: toolbar.bottom
-                anchors.topMargin: 16
+                anchors.topMargin: 12
+                anchors.horizontalCenter: parent.horizontalCenter
+                theme: appTheme
+                title: root.title
+                navigation: true
+                onStepped: delta => root.step(delta)
+                onTodayClicked: root.selectedKey = root.todayKey
+            }
+            Loader {
+                anchors.top: compactTitle.visible ? compactTitle.bottom : toolbar.bottom
+                anchors.topMargin: compactTitle.visible ? 8 : 16
                 anchors.left: sidebar.right
                 anchors.leftMargin: sidebar.visible ? 20 : 0
                 anchors.right: parent.right
@@ -422,6 +437,9 @@ ShellRoot {
                 onCreateAt: (key, hour) => form.start(key, hour)
                 writableIds: root.calendars.filter(c => !c.readonly).map(c => c.id)
                 onEventMoved: (event, start, end) => root.moveEvent(event, start, end)
+                navigation: toolbar.compactLeft
+                onStepped: delta => root.step(delta)
+                onTodayClicked: root.selectedKey = root.todayKey
             }
         }
         Component {
