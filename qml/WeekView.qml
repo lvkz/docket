@@ -184,6 +184,10 @@ Item {
                         height: Math.max(18, (modelData.endHour - modelData.startHour) * root.hourHeight - 2 + dragH)
                         onClicked: event => root.eventClicked(event)
                         onDraggingChanged: column.dragCount += dragging ? 1 : -1
+                        readonly property real minutesLong: (new Date(event.end) - new Date(event.start)) / 60000
+                        snapX: Math.round(dragX / root.colWidth) * root.colWidth
+                        snapY: root.snapped(dragY) / 60 * root.hourHeight
+                        snapH: Math.max(15 - minutesLong, root.snapped(dragH)) / 60 * root.hourHeight
                         onMoved: (dx, dy) => {
                             const days = Math.round(dx / root.colWidth), minutes = root.snapped(dy);
                             if (days || minutes)
@@ -191,8 +195,7 @@ Item {
                                                 root.shifted(event.end, days, minutes));
                         }
                         onResized: dy => {
-                            const length = (new Date(event.end) - new Date(event.start)) / 60000;
-                            const minutes = Math.max(15 - length, root.snapped(dy));
+                            const minutes = Math.max(15 - minutesLong, root.snapped(dy));
                             if (minutes)
                                 root.eventMoved(event, root.shifted(event.start, 0, 0),
                                                 root.shifted(event.end, 0, minutes));
