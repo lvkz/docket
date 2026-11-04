@@ -9,10 +9,15 @@ Rectangle {
     property bool compact: false
     // week grid: drag the body to move, the bottom edge to resize (pixel offsets on release)
     property bool movable: false
-    readonly property bool dragging: mouse.dragging
+    // mouse.dragging lasts until the next press (onClicked reads it after release)
+    readonly property bool dragging: mouse.dragging && mouse.pressed
     property real dragX: 0
     property real dragY: 0
     property real dragH: 0
+    // where a release would put it, snapped (set by the week view)
+    property real snapX: 0
+    property real snapY: 0
+    property real snapH: 0
     signal clicked(var event)
     signal moved(real dx, real dy)
     signal resized(real dy)
@@ -47,6 +52,20 @@ Rectangle {
         height: parent.height
         radius: 2
         color: root.tint
+    }
+    Rectangle {
+        objectName: "shadow"
+        parent: root.parent
+        visible: root.dragging
+        x: root.x + root.snapX
+        y: root.y + root.snapY
+        z: 1
+        width: root.width
+        height: root.height + root.snapH
+        radius: root.radius
+        color: Qt.rgba(root.tint.r, root.tint.g, root.tint.b, 0.15)
+        border.color: root.tint
+        border.width: 2
     }
     // week grid with room for two lines: title wraps above, range pinned below it
     readonly property bool twoLine: !compact && !event.allDay && height >= 34

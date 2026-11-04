@@ -86,6 +86,7 @@ ShellRoot {
     // dragged in the week view; a repeating event moves this occurrence only
     function moveEvent(event, start, end) {
         const full = events.find(e => e.id === event.id) || event;
+        backend.pendingEvent = { id: event.id, start: start, end: end };
         backend.update({
             calendar: full.calendarId, uid: full.uid, title: full.title,
             location: full.location || "", description: full.description || "",
@@ -94,6 +95,8 @@ ShellRoot {
         });
     }
     readonly property var events: backend.events
+        .map(e => backend.pendingEvent && e.id === backend.pendingEvent.id
+            ? Object.assign({}, e, { start: backend.pendingEvent.start, end: backend.pendingEvent.end }) : e)
         .filter(e => hiddenCalendars.indexOf(e.calendarId) < 0)
         .map(e => personalize(e, e.calendarId))
     // name/color here keep khal's values; calendarName/calendarColor carry the overrides

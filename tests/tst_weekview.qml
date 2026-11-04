@@ -130,6 +130,35 @@ Item {
             compare(moved.count, 0);
         }
 
+        function test_shadow_shows_the_snapped_slot() {
+            const b = block("Drag me");
+            const at = b.mapToItem(week, 20, 20);
+            mousePress(week, at.x, at.y);
+            for (let step = 1; step <= 10; ++step)
+                mouseMove(week, at.x + week.colWidth * 0.06 * step, at.y + week.hourHeight * 0.03 * step);
+            const shadow = find(c => c.objectName === "shadow");
+            verify(shadow, "a shadow while dragging");
+            // 0.6 of a column and 18 minutes: next day, 15 minutes later
+            compare(shadow.x - b.x, week.colWidth);
+            fuzzyCompare(shadow.y - b.y, week.hourHeight / 4, 0.01);
+            compare(shadow.height, b.height);
+            mouseRelease(week, at.x + week.colWidth * 0.6, at.y + week.hourHeight * 0.3);
+            verify(!find(c => c.objectName === "shadow"), "no shadow after release");
+            compare(moved.signalArguments[0][1], "2026-11-05T10:15");
+        }
+
+        function test_resize_shadow_keeps_fifteen_minutes() {
+            const b = block("Drag me");
+            const at = b.mapToItem(week, 20, b.height - 2);
+            mousePress(week, at.x, at.y);
+            for (let step = 1; step <= 10; ++step)
+                mouseMove(week, at.x, at.y - week.hourHeight * 0.3 * step);
+            const shadow = find(c => c.objectName === "shadow");
+            fuzzyCompare(shadow.height - b.height, -week.hourHeight * 0.75, 0.01);
+            compare(shadow.y, b.y);
+            mouseRelease(week, at.x, at.y - week.hourHeight * 3);
+        }
+
         function test_title_navigation_when_narrow() {
             week.title = "November 2026";
             const arrow = text => find(c => c.text === text && c.clicked !== undefined);

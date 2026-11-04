@@ -13,6 +13,9 @@ Item {
     property bool syncing: false
     property string rangeFrom: ""
     property string rangeTo: ""
+    // {id, start, end} of an event just dragged: the window shows it there until the save
+    // and the reload after it finish (or the save fails), so it doesn't jump back meanwhile
+    property var pendingEvent: null
 
     // a create/update/delete went through
     signal written()
@@ -78,6 +81,7 @@ Item {
             onStreamFinished: {
                 const payload = root.parse(text, "Loading events");
                 if (payload) { root.events = payload.events; root.error = ""; }
+                if (!writeProc.running) root.pendingEvent = null;
             }
         }
         onExited: if (pending) { pending = false; root.reload(); }
@@ -123,6 +127,7 @@ Item {
         stdout: StdioCollector {
             onStreamFinished: {
                 if (root.parse(text, writeProc.what)) { root.error = ""; root.written(); root.reload(); }
+                else root.pendingEvent = null;
             }
         }
     }
