@@ -222,6 +222,31 @@ class HelperTest(unittest.TestCase):
         self.assertTrue(found["ok"], found)
         self.assertEqual([e["uid"] for e in found["events"]], ["meeting"])
 
+    def fake_systemctl(self, exit_code):
+        """PATH with a systemctl that logs its arguments; no khal config, so the helper syncs."""
+        bin_dir = Path(self.dir.name) / "fakebin"
+        bin_dir.mkdir(exist_ok=True)
+        log = Path(self.dir.name) / "systemctl.log"
+        script = bin_dir / "systemctl"
+        script.write_text(f'#!/bin/sh\necho "$*" >> {log}\nexit {exit_code}\n')
+        script.chmod(0o755)
+        env = {k: v for k, v in self.env.items() if k != "DOCKET_KHAL_CONFIG"}
+        env["PATH"] = f"{bin_dir}:{os.environ['PATH']}"
+        return env, log
+
+    def test_sync_runs_twice(self):
+        # Google rewrites what it's sent; the second pass fetches that copy right away
+        env, log = self.fake_systemctl(0)
+        result = subprocess.run([str(HELPER), "sync"], capture_output=True, text=True, env=env)
+        self.assertTrue(json.loads(result.stdout)["ok"], result.stdout)
+        self.assertEqual(log.read_text().splitlines(), ["--user start vdirsyncer-sync.service"] * 2)
+
+    def test_sync_failure_is_reported(self):
+        env, log = self.fake_systemctl(1)
+        result = subprocess.run([str(HELPER), "sync"], capture_output=True, text=True, env=env)
+        self.assertFalse(json.loads(result.stdout)["ok"])
+        self.assertEqual(len(log.read_text().splitlines()), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
