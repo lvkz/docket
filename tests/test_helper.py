@@ -222,6 +222,17 @@ class HelperTest(unittest.TestCase):
         self.assertTrue(found["ok"], found)
         self.assertEqual([e["uid"] for e in found["events"]], ["meeting"])
 
+    def test_unwritable_calendar_is_an_error_not_a_crash(self):
+        folder = Path(self.dir.name) / "account/test"
+        folder.chmod(0o555)
+        try:
+            result = self.edit("this", "2026-11-09T10:00:00-05:00",
+                               "2026-11-09T11:00", "2026-11-09T12:00", "Standup")
+        finally:
+            folder.chmod(0o755)
+        self.assertFalse(result["ok"])
+        self.assertIn("Permission denied", result["error"])
+
     def fake_systemctl(self, exit_code):
         """PATH with a systemctl that logs its arguments; no khal config, so the helper syncs."""
         bin_dir = Path(self.dir.name) / "fakebin"
