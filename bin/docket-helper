@@ -533,14 +533,21 @@ def create(payload):
 
 
 def start_sync(wait):
+    """Two passes: Google stores its own rewrite of what it's sent, and until a sync fetches
+    that copy, deleting or editing the event here conflicts with it and vdirsyncer undoes ours.
+    wait=False runs `docket-helper sync` in the background (its errors land in the journal)."""
     if os.environ.get("DOCKET_KHAL_CONFIG"):
         return False
-    cmd = ["systemctl", "--user", "start", "vdirsyncer-sync.service"]
     if not wait:
-        cmd.insert(3, "--no-block")
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        raise HelperError(f"vdirsyncer sync failed: {result.stderr.strip()}")
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "sync"],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+        return True
+    for _ in range(2):  # the service is oneshot: each start waits for its sync to finish
+        result = subprocess.run(["systemctl", "--user", "start", "vdirsyncer-sync.service"],
+                                capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            raise HelperError(f"vdirsyncer sync failed: {result.stderr.strip()}")
     return True
 
 
